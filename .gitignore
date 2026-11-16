@@ -1,0 +1,16 @@
+# Entorno virtual y caché de Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Artefactos de compilación de PyInstaller
+build/
+dist/
+*.exe
+*.zip
+
+# Carpetas locales de descargas y pruebas
+Descargas/
+EVERYONE IS HERE/
