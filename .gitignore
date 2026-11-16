@@ -14,3 +14,8 @@ dist/
 # Carpetas locales de descargas y pruebas
 Descargas/
 EVERYONE IS HERE/
+
+# Atajos locales, notas internas y archivos exclusivos del ZIP portable
+*.bat
+LEEME_ANTES_DE_ABRIR.txt
+CONTEXTO_PROYECTO.md
