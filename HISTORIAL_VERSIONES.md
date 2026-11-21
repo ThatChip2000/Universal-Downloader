@@ -4,6 +4,22 @@ Este documento registra de forma cronológica y versionada todas las funcionalid
 
 ---
 
+## v3.0.2 (21-11-2026) - Correcciones Integrales de Auditoría Técnica (Concurrencia, Motor Externo en Clips y Tema Sistema)
+### Correcciones Funcionales, Concurrencia y Estabilidad
+- **Unificación del motor externo (`yt-dlp.exe`) en análisis y módulo de recorte (`[A1]`):**
+  - La Pestaña 2 (`Recortar Fragmento`) ahora utiliza el motor externo actualizado (`_run_clip_with_external_engine` con `--download-sections` y `--force-keyframes-at-cuts`) cuando `use_external_engine` está activo.
+  - La Pestaña 1 (`_analyze_url_worker`) incorpora respaldo con `yt-dlp.exe --dump-single-json` y ambas pestañas ejecutan `_populate_missing_direct_filesizes` tras el análisis externo.
+- **Detección nativa del tema `"Sistema"` en Qt6 (`[A2]`):**
+  - `set_appearance_mode("system")` en `qt_backend.py` ahora consulta `app.styleHints().colorScheme()` (`Qt.ColorScheme.Light` / `Dark`) en tiempo real.
+- **Priorización HLS (`m3u8`) compartida en Pestaña 2 y respaldo FxTwitter (`[A3]`):**
+  - Se unificó la selección de formato en `_select_optimal_video_format()`, aplicando la regla HLS (`> 900 MB` en X/Twitter) tanto en descargas generales como en recortes de clips y conservando variantes `.m3u8` en `_extract_twitter_fallback_info`.
+- **Seguridad de hilos, limpieza de recursos y pulido general (`[M1–M4]`, `[B1–B5]`):**
+  - Protección con `threading.Lock` (`_cache_lock`) para `_url_info_cache` y `_thumb_cache`, y eliminación de lecturas de widgets Qt desde hilos secundarios.
+  - `CTkScrollableFrame.winfo_children()` ahora es no destructivo (`itemAt(i)`) y `_clear_url` destruye correctamente los widgets de listas previas.
+  - Respaldo directo de `.mp3` en Suno cuando no hay FFmpeg, limpieza garantizada de archivos `.tmp` en bloques `finally`, restauración de validación SSL por defecto y centralización de `APP_VERSION = "3.0.2"`.
+
+---
+
 ## v3.0.1 (14-11-2026) - Corrección Crítica de Descargas Gigantes en X/Twitter y Bug de Subscript en NoneType
 ### Correcciones Críticas de Red y Excepciones
 - **Priorización automática de HLS (`m3u8`) en videos de X/Twitter mayores a 900 MB:**

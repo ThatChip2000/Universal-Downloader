@@ -13,6 +13,8 @@ from pathlib import Path
 import qt_backend as ctk
 import yt_dlp
 
+APP_VERSION = "3.0.2"
+
 # Parche de seguridad para corregir el bug interno de yt-dlp donde exc_info es None
 # y al evaluar 'hasattr(e, "exc_info") and e.exc_info[0]' arroja TypeError: 'NoneType' object is not subscriptable.
 _orig_ytdlp_trouble = yt_dlp.YoutubeDL.trouble
@@ -292,6 +294,7 @@ class UniversalDownloaderApp(ctk.CTk):
         self.locked_format_id: str | None = None
         self._analyze_generation = 0
         self._url_debounce_after_id: str | None = None
+        self._cache_lock = threading.Lock()
         self._url_info_cache: dict[str, dict] = {}
         self._thumb_cache: dict[str, ctk.CTkImage] = {}
         self._placeholder_thumb = self._create_placeholder_ctk_image()
@@ -346,7 +349,7 @@ class UniversalDownloaderApp(ctk.CTk):
             if sys.platform == "win32":
                 import ctypes
                 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                    "UniversalMediaTools.UniversalDownloader.2.2"
+                    f"UniversalMediaTools.UniversalDownloader.{APP_VERSION}"
                 )
             base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
             icon_path = os.path.join(base_dir, "app_icon.ico")
@@ -835,7 +838,7 @@ class UniversalDownloaderApp(ctk.CTk):
 
         self.clip_range_summary_label = ctk.CTkLabel(
             range_header,
-            text="Tramo: 00:00 a 00:15  •  Duración: 15 s",
+            text="Rango: 00:00 -> 00:15  (Duración del clip: 00:15)",
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color=("#1f6aa5", "#5dade2"),
             anchor="e",
@@ -955,7 +958,7 @@ class UniversalDownloaderApp(ctk.CTk):
 
         self.clip_size_estimate_label = ctk.CTkLabel(
             clip_size_badge,
-            text="Peso del recorte: Pega un enlace",
+            text="Peso del fragmento: Pega un enlace",
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color=("#1f6aa5", "#5dade2"),
             anchor="w",
@@ -1142,6 +1145,8 @@ class UniversalDownloaderApp(ctk.CTk):
         self.analyzed_info = None
         self.locked_format_id = None
         self.is_playlist_mode = False
+        for child in self.playlist_scroll.winfo_children():
+            child.destroy()
         self.playlist_vars.clear()
         self.preview_card_frame.grid_remove()
         self.playlist_frame.grid_remove()
@@ -1200,8 +1205,10 @@ class UniversalDownloaderApp(ctk.CTk):
             target_label.configure(image=self._placeholder_thumb)
             return
 
-        if thumb_url in self._thumb_cache:
-            target_label.configure(image=self._thumb_cache[thumb_url])
+        with self._cache_lock:
+            cached_img = self._thumb_cache.get(thumb_url)
+        if cached_img is not None:
+            target_label.configure(image=cached_img)
             return
 
         target_label.configure(image=self._placeholder_thumb)
@@ -1222,10 +1229,11 @@ class UniversalDownloaderApp(ctk.CTk):
                 ctk_img = ctk.decode_thumbnail_bytes_to_ctk_image(raw_bytes, size=(88, 50))
                 if not ctk_img:
                     return
-                if len(self._thumb_cache) >= 32:
-                    oldest = next(iter(self._thumb_cache))
-                    self._thumb_cache.pop(oldest, None)
-                self._thumb_cache[thumb_url] = ctk_img
+                with self._cache_lock:
+                    if len(self._thumb_cache) >= 32:
+                        oldest = next(iter(self._thumb_cache))
+                        self._thumb_cache.pop(oldest, None)
+                    self._thumb_cache[thumb_url] = ctk_img
                 current_gen = self._clip_analyze_generation if is_clip_tab else self._analyze_generation
                 if generation == current_gen:
                     self.after(0, lambda: target_label.configure(image=ctk_img))
@@ -1424,9 +1432,11 @@ class UniversalDownloaderApp(ctk.CTk):
             return
 
         # Consulta instantánea en caché LRU en memoria (0 ms) si el enlace ya fue analizado en la sesión
-        if not force and url in self._url_info_cache:
+        with self._cache_lock:
+            cached_info = self._url_info_cache.get(url)
+        if not force and cached_info is not None:
             self.analyzed_url = url
-            self._apply_analyzed_info_to_ui(self._url_info_cache[url])
+            self._apply_analyzed_info_to_ui(cached_info)
             return
 
         self._analyze_generation += 1
@@ -1582,7 +1592,7 @@ class UniversalDownloaderApp(ctk.CTk):
         vid_idx = max(0, int(m.group(2)) - 1) if m.group(2) else 0
 
         api_url = f"https://api.fxtwitter.com/status/{tweet_id}"
-        req = urllib.request.Request(api_url, headers={"User-Agent": "UniversalDownloader/2.5"})
+        req = urllib.request.Request(api_url, headers={"User-Agent": f"UniversalDownloader/{APP_VERSION}"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
@@ -1611,6 +1621,19 @@ class UniversalDownloaderApp(ctk.CTk):
             if not v_url.startswith(("http://", "https://")):
                 continue
             if ".m3u8" in v_url or var.get("container") == "m3u8":
+                formats.append(
+                    {
+                        "format_id": f"hls-master-{idx}",
+                        "url": v_url,
+                        "ext": "mp4",
+                        "protocol": "m3u8_native",
+                        "vcodec": "h264",
+                        "acodec": "none" if is_gif else "aac",
+                        "width": int(vid["width"]) if vid.get("width") else None,
+                        "height": int(vid["height"]) if vid.get("height") else None,
+                        "tbr": None,
+                    }
+                )
                 continue
 
             w, h = None, None
@@ -1674,19 +1697,32 @@ class UniversalDownloaderApp(ctk.CTk):
     def _select_twitter_fallback_stream_url(
         self, info: dict, selected_quality: str, locked_id: str | None = None
     ) -> str | None:
-        """Elige la URL directa de video.twimg.com correspondiente a la calidad seleccionada."""
+        """Elige la URL directa de video.twimg.com correspondiente a la calidad seleccionada (priorizando HLS si > 900 MB)."""
         formats = info.get("formats") or []
         if not formats:
             return None
+        hls_formats = [f for f in formats if "m3u8" in str(f.get("protocol") or "") and f.get("url")]
+        http_formats = [f for f in formats if "m3u8" not in str(f.get("protocol") or "") and f.get("url")]
+
         if locked_id:
+            base_locked = locked_id.split("+")[0]
             for f in formats:
-                if str(f.get("format_id")) == locked_id and f.get("url"):
+                if str(f.get("format_id")) in (locked_id, base_locked) and f.get("url"):
+                    f_bytes = f.get("filesize") or f.get("filesize_approx") or 0
+                    if (
+                        "m3u8" not in str(f.get("protocol") or "")
+                        and f_bytes > 900 * 1024 * 1024
+                        and self.ffmpeg_path
+                        and hls_formats
+                    ):
+                        return str(hls_formats[0]["url"])
                     return str(f["url"])
 
         tier_bounds = self.VIDEO_QUALITIES.get(selected_quality)
-        candidates = [f for f in formats if self._fits_resolution_tier(f, tier_bounds)]
+        pool_base = http_formats if http_formats else formats
+        candidates = [f for f in pool_base if self._fits_resolution_tier(f, tier_bounds)]
         if not candidates:
-            candidates = list(formats)
+            candidates = list(pool_base)
         candidates.sort(
             key=lambda f: (
                 max(f.get("width") or 0, f.get("height") or 0),
@@ -1695,7 +1731,18 @@ class UniversalDownloaderApp(ctk.CTk):
             ),
             reverse=True,
         )
-        return str(candidates[0].get("url")) if candidates else None
+        if not candidates:
+            return None
+        chosen = candidates[0]
+        chosen_bytes = chosen.get("filesize") or chosen.get("filesize_approx") or 0
+        if (
+            "m3u8" not in str(chosen.get("protocol") or "")
+            and chosen_bytes > 900 * 1024 * 1024
+            and self.ffmpeg_path
+            and hls_formats
+        ):
+            return str(hls_formats[0]["url"])
+        return str(chosen.get("url"))
 
     def _download_twitter_fallback(
         self,
@@ -1808,7 +1855,6 @@ class UniversalDownloaderApp(ctk.CTk):
             "no_warnings": True,
             "extract_flat": "in_playlist",
             "playlistend": 100,
-            "nocheckcertificate": True,
             "skip_download": True,
             "http_headers": base_headers,
         }
@@ -1865,20 +1911,47 @@ class UniversalDownloaderApp(ctk.CTk):
                         else:
                             self._populate_missing_direct_filesizes(info, ydl)
                 except Exception:
+                    info = None
                     if self._is_twitter_status_url(url):
-                        info = self._extract_twitter_fallback_info(url)
-                        if not info:
+                        try:
+                            info = self._extract_twitter_fallback_info(url)
+                        except Exception:
+                            info = None
+                    if not info:
+                        if self.use_external_engine and self.external_ytdlp_path.is_file():
+                            creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+                            res = subprocess.run(
+                                [
+                                    str(self.external_ytdlp_path),
+                                    "--dump-single-json",
+                                    "--no-playlist",
+                                    "--no-warnings",
+                                    "--no-check-certificate",
+                                    url,
+                                ],
+                                capture_output=True,
+                                text=True,
+                                encoding="utf-8",
+                                errors="replace",
+                                timeout=25,
+                                creationflags=creation_flags,
+                            )
+                            if res.returncode == 0 and res.stdout.strip():
+                                info = json.loads(res.stdout.strip().splitlines()[-1])
+                                self._populate_missing_direct_filesizes(info, None)
+                            else:
+                                raise
+                        else:
                             raise
-                    else:
-                        raise
 
             if generation != self._analyze_generation or not info:
                 return
 
-            if len(self._url_info_cache) >= 32:
-                oldest_key = next(iter(self._url_info_cache))
-                self._url_info_cache.pop(oldest_key, None)
-            self._url_info_cache[url] = info
+            with self._cache_lock:
+                if len(self._url_info_cache) >= 32:
+                    oldest_key = next(iter(self._url_info_cache))
+                    self._url_info_cache.pop(oldest_key, None)
+                self._url_info_cache[url] = info
 
             self.after(0, lambda: self._apply_analyzed_info_to_ui(info))
 
@@ -2188,31 +2261,42 @@ class UniversalDownloaderApp(ctk.CTk):
             return
 
         # Caso 2: Video MP4 -> elegir el flujo exacto y fijar su format_id para que la descarga baje ese mismo flujo
-        tier_bounds = self.VIDEO_QUALITIES.get(selected_quality)
-        all_video = [
-            f for f in formats
-            if self._has_video(f) and f.get("format_id")
-        ]
-
-        # Filtrar los que cumplen la resolución máxima elegida
-        tier_candidates = [f for f in all_video if self._fits_resolution_tier(f, tier_bounds)]
-        if not tier_candidates:
-            tier_candidates = all_video
-
-        if not tier_candidates:
+        locked_id, best_v, total_bytes, is_exact = self._select_optimal_video_format(
+            info, selected_quality, self.analyzed_url or ""
+        )
+        if not best_v:
             fallback_total = info.get("filesize") or info.get("filesize_approx")
             self._set_size_label(f"Peso estimado: {format_bytes(fallback_total)}")
             return
 
-        # Si existen flujos directos HTTPS con tamaño en bytes conocido,
-        # descartar manifiestos m3u8 que no informan tamaño real o separan audio innecesariamente.
+        self.locked_format_id = locked_id
+        res_tag = self._resolution_label(best_v)
+        label_prefix = "Peso exacto" if is_exact else "Peso estimado"
+        self._set_size_label(
+            f"{label_prefix} ({res_tag}): {format_bytes(total_bytes, is_exact=is_exact)}"
+        )
+
+    def _select_optimal_video_format(
+        self, info: dict, selected_quality: str, url_hint: str = ""
+    ) -> tuple[str | None, dict | None, int, bool]:
+        """
+        Selecciona de forma thread-safe (sin leer widgets Qt) el format_id óptimo para Video MP4,
+        aplicando priorización HLS (m3u8) en videos de X/Twitter mayores a 900 MB.
+        Devuelve: (locked_format_id, best_v_dict, total_bytes, is_exact)
+        """
+        duration = info.get("duration")
+        formats = info.get("formats") or []
+        tier_bounds = self.VIDEO_QUALITIES.get(selected_quality)
+        all_video = [f for f in formats if self._has_video(f) and f.get("format_id")]
+
+        tier_candidates = [f for f in all_video if self._fits_resolution_tier(f, tier_bounds)]
+        if not tier_candidates:
+            tier_candidates = all_video
+        if not tier_candidates:
+            return None, None, 0, False
+
         exact_candidates = [f for f in tier_candidates if self._has_exact_filesize(f)]
         pool = exact_candidates if exact_candidates else tier_candidates
-
-        # Ordenar priorizando:
-        # 1) Mayor resolución dentro del nivel elegido (lado largo, alto)
-        # 2) Si empatan en resolución, priorizar los que ya traen audio incluido (acodec != 'none') o contenedor MP4
-        # 3) Mayor tamaño/calidad verificada
         pool.sort(
             key=lambda f: (
                 max(f.get("width") or 0, f.get("height") or 0),
@@ -2232,7 +2316,7 @@ class UniversalDownloaderApp(ctk.CTk):
         # Si hay un flujo HLS (m3u8) de igual resolución y FFmpeg está disponible, priorizar HLS por fragmentos.
         is_twitter_src = (
             "twitter" in str(info.get("extractor") or "").lower()
-            or self._is_twitter_status_url(self.analyzed_url or info.get("webpage_url") or "")
+            or self._is_twitter_status_url(url_hint or info.get("webpage_url") or "")
         )
         if (
             is_twitter_src
@@ -2259,15 +2343,9 @@ class UniversalDownloaderApp(ctk.CTk):
                 v_bytes = self._stream_bytes(best_v, duration)
 
         is_exact = bool(best_v.get("filesize")) and "m3u8" not in str(best_v.get("protocol") or "")
-
-        # Solo si el flujo de video explícitamente NO tiene audio (acodec == 'none', ej. DASH en YouTube o HLS en X),
-        # buscamos y sumamos la mejor pista de solo-audio (incluso si acodec es None como en hls-audio de X).
         a_bytes = 0
         if best_v.get("acodec") == "none" and self.ffmpeg_path:
-            audio_only = [
-                f for f in formats
-                if self._is_audio_only(f) and f.get("format_id")
-            ]
+            audio_only = [f for f in formats if self._is_audio_only(f) and f.get("format_id")]
             exact_audio = [f for f in audio_only if self._has_exact_filesize(f)]
             audio_pool = exact_audio if exact_audio else audio_only
             if audio_pool:
@@ -2282,20 +2360,15 @@ class UniversalDownloaderApp(ctk.CTk):
                 best_a = audio_pool[0]
                 a_id = str(best_a.get("format_id"))
                 a_bytes = self._stream_bytes(best_a, duration)
-                self.locked_format_id = f"{v_id}+{a_id}"
+                locked_id = f"{v_id}+{a_id}"
                 is_exact = is_exact and bool(best_a.get("filesize"))
             else:
-                self.locked_format_id = f"{v_id}+bestaudio/{v_id}"
+                locked_id = f"{v_id}+bestaudio/{v_id}"
                 is_exact = False
         else:
-            self.locked_format_id = v_id
+            locked_id = v_id
 
-        total_bytes = v_bytes + a_bytes
-        res_tag = self._resolution_label(best_v)
-        label_prefix = "Peso exacto" if is_exact else "Peso estimado"
-        self._set_size_label(
-            f"{label_prefix} ({res_tag}): {format_bytes(total_bytes, is_exact=is_exact)}"
-        )
+        return locked_id, best_v, v_bytes + a_bytes, is_exact
 
     # -------------------------------------------------------------------------
     # UTILIDADES DE INTERFAZ Y THREAD-SAFETY
@@ -2330,10 +2403,6 @@ class UniversalDownloaderApp(ctk.CTk):
         def _write():
             self.log_textbox.configure(state="normal")
             self.log_textbox.insert("end", f"{message}\n")
-            # Mantener el historial acotado a 500 líneas para uso constante de memoria RAM
-            line_count = int(self.log_textbox.index("end-1c").split(".")[0])
-            if line_count > 500:
-                self.log_textbox.delete("1.0", f"{line_count - 500}.0")
             self.log_textbox.see("end")
             self.log_textbox.configure(state="disabled")
 
@@ -2467,7 +2536,7 @@ class UniversalDownloaderApp(ctk.CTk):
         try:
             req = urllib.request.Request(
                 self.YTDLP_RELEASE_API,
-                headers={"User-Agent": "UniversalDownloader/2.2"},
+                headers={"User-Agent": f"UniversalDownloader/{APP_VERSION}"},
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -2480,7 +2549,7 @@ class UniversalDownloaderApp(ctk.CTk):
         try:
             req = urllib.request.Request(
                 self.YTDLP_PYPI_API,
-                headers={"User-Agent": "UniversalDownloader/2.2"},
+                headers={"User-Agent": f"UniversalDownloader/{APP_VERSION}"},
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
@@ -2542,11 +2611,11 @@ class UniversalDownloaderApp(ctk.CTk):
         threading.Thread(target=self._run_update_api_task, daemon=True).start()
 
     def _run_update_api_task(self):
+        temp_target = self.external_ytdlp_path.with_suffix(".tmp")
         try:
-            temp_target = self.external_ytdlp_path.with_suffix(".tmp")
             req = urllib.request.Request(
                 self.YTDLP_EXE_DOWNLOAD_URL,
-                headers={"User-Agent": "UniversalDownloader/2.2"},
+                headers={"User-Agent": f"UniversalDownloader/{APP_VERSION}"},
             )
             with urllib.request.urlopen(req, timeout=30) as response:
                 total_size = int(response.headers.get("Content-Length", 0))
@@ -2598,6 +2667,11 @@ class UniversalDownloaderApp(ctk.CTk):
             self._update_status("Error al actualizar la API (revisa el registro)", 0.0, "Error")
             self._append_log(f"[ERROR DE ACTUALIZACIÓN] No se pudo completar la descarga: {exc}")
         finally:
+            if temp_target.is_file():
+                try:
+                    temp_target.unlink()
+                except Exception:
+                    pass
             self._set_ui_busy(False)
 
     # -------------------------------------------------------------------------
@@ -2734,7 +2808,6 @@ class UniversalDownloaderApp(ctk.CTk):
             "overwrites": True,
             "continuedl": True,
             "windowsfilenames": True,
-            "nocheckcertificate": True,
             "retries": 25,
             "fragment_retries": 25,
             "socket_timeout": 30,
@@ -2801,7 +2874,6 @@ class UniversalDownloaderApp(ctk.CTk):
             "--force-overwrites",
             "--continue",
             "--windows-filenames",
-            "--no-check-certificate",
             "--retries",
             "25",
             "--fragment-retries",
@@ -3002,47 +3074,49 @@ class UniversalDownloaderApp(ctk.CTk):
         if selected_format == self.FORMAT_IMAGE_GIF:
             target_url = info["suno_img_url"]
             final_path = os.path.join(self.download_dir, f"{base_name}.jpg")
+            temp_download_path = final_path + ".tmp"
         elif selected_format == self.FORMAT_VIDEO:
             target_url = info["suno_mp4_url"]
             final_path = os.path.join(self.download_dir, f"{base_name}.mp4")
+            temp_download_path = final_path + ".tmp"
         else:
-            target_url = info["suno_mp4_url"]
             final_path = os.path.join(self.download_dir, f"{base_name}.mp3")
-
-        temp_download_path = (
-            final_path + ".tmp.mp4" if selected_format == self.FORMAT_AUDIO else final_path
-        )
+            if self.ffmpeg_path:
+                target_url = info["suno_mp4_url"]
+                temp_download_path = final_path + ".tmp.mp4"
+            else:
+                target_url = f"https://cdn1.suno.ai/{song_id}.mp3"
+                temp_download_path = final_path + ".tmp.mp3"
 
         self._append_log(f"[INFO] Pista detectada: {info.get('title')}")
         req = urllib.request.Request(target_url, headers=headers)
-        t_start = threading.Event()
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            total = int(resp.headers.get("Content-Length", 0)) or info.get("filesize") or 0
-            downloaded = 0
-            chunk_size = 256 * 1024
-            with open(temp_download_path, "wb") as out_f:
-                while True:
-                    chunk = resp.read(chunk_size)
-                    if not chunk:
-                        break
-                    out_f.write(chunk)
-                    downloaded += len(chunk)
-                    if total > 0:
-                        scale = 0.90 if selected_format == self.FORMAT_AUDIO else 0.98
-                        frac = (downloaded / total) * scale
-                        pct = int(frac * 100)
-                        self._update_status(
-                            f"Descargando ({format_bytes(total, is_exact=True)})...",
-                            frac,
-                            f"{pct}%",
-                            throttle=True,
-                        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                total = int(resp.headers.get("Content-Length", 0)) or info.get("filesize") or 0
+                downloaded = 0
+                chunk_size = 256 * 1024
+                with open(temp_download_path, "wb") as out_f:
+                    while True:
+                        chunk = resp.read(chunk_size)
+                        if not chunk:
+                            break
+                        out_f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            scale = 0.90 if (selected_format == self.FORMAT_AUDIO and self.ffmpeg_path) else 0.98
+                            frac = (downloaded / total) * scale
+                            pct = int(frac * 100)
+                            self._update_status(
+                                f"Descargando ({format_bytes(total, is_exact=True)})...",
+                                frac,
+                                f"{pct}%",
+                                throttle=True,
+                            )
 
-        if selected_format == self.FORMAT_AUDIO:
-            kbps = self.AUDIO_QUALITIES.get(selected_quality, 320)
-            self._append_log(f"Convirtiendo pista de audio a MP3 ({kbps} kbps)...")
-            self._update_status(f"Codificando archivo MP3 a {kbps} kbps...", 0.95, "95%")
-            if self.ffmpeg_path:
+            if selected_format == self.FORMAT_AUDIO and self.ffmpeg_path:
+                kbps = self.AUDIO_QUALITIES.get(selected_quality, 320)
+                self._append_log(f"Convirtiendo pista de audio a MP3 ({kbps} kbps)...")
+                self._update_status(f"Codificando archivo MP3 a {kbps} kbps...", 0.95, "95%")
                 creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
                 cmd = [
                     self.ffmpeg_path,
@@ -3059,14 +3133,16 @@ class UniversalDownloaderApp(ctk.CTk):
                     final_path,
                 ]
                 res = subprocess.run(cmd, capture_output=True, text=True, creationflags=creation_flags)
-                try:
-                    os.remove(temp_download_path)
-                except Exception:
-                    pass
                 if res.returncode != 0 or not os.path.isfile(final_path):
                     raise yt_dlp.utils.DownloadError("Error al convertir el audio a MP3 con FFmpeg.")
             else:
                 shutil.move(temp_download_path, final_path)
+        finally:
+            if os.path.isfile(temp_download_path):
+                try:
+                    os.remove(temp_download_path)
+                except Exception:
+                    pass
 
         return final_path
 
@@ -3090,7 +3166,6 @@ class UniversalDownloaderApp(ctk.CTk):
                     "quiet": True,
                     "no_warnings": True,
                     "noplaylist": True,
-                    "nocheckcertificate": True,
                     "skip_download": True,
                 }
                 with yt_dlp.YoutubeDL(probe_opts) as probe_ydl:
@@ -3107,8 +3182,16 @@ class UniversalDownloaderApp(ctk.CTk):
                     if self._is_twitter_gif_info(probe_info):
                         selected_format = self.FORMAT_IMAGE_GIF
                     else:
-                        self._recalculate_realtime_size()
-                        locked_id = self.locked_format_id
+                        locked_id, best_v, total_bytes, is_exact = self._select_optimal_video_format(
+                            probe_info, selected_quality, url
+                        )
+                        self.locked_format_id = locked_id
+                        if best_v:
+                            res_tag = self._resolution_label(best_v)
+                            label_prefix = "Peso exacto" if is_exact else "Peso estimado"
+                            self._set_size_label(
+                                f"{label_prefix} ({res_tag}): {format_bytes(total_bytes, is_exact=is_exact)}"
+                            )
                         if locked_id:
                             self._append_log(f"Flujo óptimo verificado automáticamente (ID): {locked_id}")
             except Exception:
@@ -3335,7 +3418,7 @@ class UniversalDownloaderApp(ctk.CTk):
         self.clip_locked_format_id = None
         self.clip_total_duration = 0.0
         self.clip_start_sec = 0.0
-        self.clip_end_sec = 10.0
+        self.clip_end_sec = 15.0
 
         self.clip_thumb_label.configure(image=self._placeholder_thumb)
         self.clip_title_label.configure(text="Ningún video cargado")
@@ -3349,19 +3432,19 @@ class UniversalDownloaderApp(ctk.CTk):
 
         self._clip_syncing_ui = True
         try:
-            self.clip_start_slider.configure(from_=0.0, to=100.0)
-            self.clip_end_slider.configure(from_=0.0, to=100.0)
+            self.clip_start_slider.configure(from_=0.0, to=60.0)
+            self.clip_end_slider.configure(from_=0.0, to=60.0)
             self.clip_start_slider.set(0.0)
-            self.clip_end_slider.set(10.0)
+            self.clip_end_slider.set(15.0)
             self.clip_start_entry.delete(0, "end")
             self.clip_start_entry.insert(0, "00:00")
             self.clip_end_entry.delete(0, "end")
-            self.clip_end_entry.insert(0, "00:10")
+            self.clip_end_entry.insert(0, "00:15")
         finally:
             self._clip_syncing_ui = False
 
         self.clip_range_summary_label.configure(
-            text="Rango: 00:00 -> 00:10  (Duración del clip: 00:10)"
+            text="Rango: 00:00 -> 00:15  (Duración del clip: 00:15)"
         )
         self.clip_size_estimate_label.configure(text="Peso del fragmento: Pega un enlace")
 
@@ -3393,7 +3476,8 @@ class UniversalDownloaderApp(ctk.CTk):
 
     def _analyze_clip_url_worker(self, url: str, generation: int):
         try:
-            cached = self._url_info_cache.get(url)
+            with self._cache_lock:
+                cached = self._url_info_cache.get(url)
             if cached is not None and not cached.get("_is_playlist"):
                 if generation != self._clip_analyze_generation:
                     return
@@ -3407,7 +3491,6 @@ class UniversalDownloaderApp(ctk.CTk):
                     "quiet": True,
                     "no_warnings": True,
                     "noplaylist": True,
-                    "nocheckcertificate": True,
                     "skip_download": True,
                     "http_headers": {
                         "User-Agent": (
@@ -3454,6 +3537,7 @@ class UniversalDownloaderApp(ctk.CTk):
                             )
                             if res.returncode == 0 and res.stdout.strip():
                                 info = json.loads(res.stdout.strip().splitlines()[-1])
+                                self._populate_missing_direct_filesizes(info, None)
                             else:
                                 raise
                         else:
@@ -3471,10 +3555,11 @@ class UniversalDownloaderApp(ctk.CTk):
                 )
                 return
 
-            if len(self._url_info_cache) >= 32:
-                oldest_key = next(iter(self._url_info_cache))
-                self._url_info_cache.pop(oldest_key, None)
-            self._url_info_cache[url] = info
+            with self._cache_lock:
+                if len(self._url_info_cache) >= 32:
+                    oldest_key = next(iter(self._url_info_cache))
+                    self._url_info_cache.pop(oldest_key, None)
+                self._url_info_cache[url] = info
 
             self.after(0, lambda: self._apply_clip_analyzed_info_to_ui(info))
 
@@ -3719,15 +3804,11 @@ class UniversalDownloaderApp(ctk.CTk):
         info = self.clip_analyzed_info
         full_duration = float(info.get("duration") or 0.0)
         ratio = min(1.0, max(0.01, clip_dur / full_duration)) if full_duration > 0 else 1.0
-        formats = info.get("formats") or []
 
-        tier_bounds = self.VIDEO_QUALITIES.get(selected_quality)
-        all_video = [f for f in formats if self._has_video(f) and f.get("format_id")]
-        tier_candidates = [f for f in all_video if self._fits_resolution_tier(f, tier_bounds)]
-        if not tier_candidates:
-            tier_candidates = all_video
-
-        if not tier_candidates:
+        locked_id, best_v, total_full_bytes, _is_exact = self._select_optimal_video_format(
+            info, selected_quality, self.clip_analyzed_url or ""
+        )
+        if not best_v:
             fallback_total = info.get("filesize") or info.get("filesize_approx") or 0
             clip_bytes = int(fallback_total * ratio) if fallback_total else 0
             self.clip_size_estimate_label.configure(
@@ -3735,46 +3816,7 @@ class UniversalDownloaderApp(ctk.CTk):
             )
             return
 
-        exact_candidates = [f for f in tier_candidates if self._has_exact_filesize(f)]
-        pool = exact_candidates if exact_candidates else tier_candidates
-        pool.sort(
-            key=lambda f: (
-                max(f.get("width") or 0, f.get("height") or 0),
-                f.get("height") or 0,
-                1 if f.get("acodec") != "none" else 0,
-                1 if f.get("ext") == "mp4" else 0,
-                self._stream_bytes(f, full_duration),
-            ),
-            reverse=True,
-        )
-        best_v = pool[0]
-        v_id = str(best_v.get("format_id"))
-        v_bytes = self._stream_bytes(best_v, full_duration)
-
-        a_bytes = 0
-        if best_v.get("acodec") == "none" and self.ffmpeg_path:
-            audio_only = [f for f in formats if self._is_audio_only(f) and f.get("format_id")]
-            exact_audio = [f for f in audio_only if self._has_exact_filesize(f)]
-            audio_pool = exact_audio if exact_audio else audio_only
-            if audio_pool:
-                audio_pool.sort(
-                    key=lambda f: (
-                        1 if f.get("ext") in ("m4a", "mp4") else 0,
-                        f.get("abr") or f.get("tbr") or 0,
-                        self._stream_bytes(f, full_duration),
-                    ),
-                    reverse=True,
-                )
-                best_a = audio_pool[0]
-                a_id = str(best_a.get("format_id"))
-                a_bytes = self._stream_bytes(best_a, full_duration)
-                self.clip_locked_format_id = f"{v_id}+{a_id}"
-            else:
-                self.clip_locked_format_id = f"{v_id}+bestaudio/{v_id}"
-        else:
-            self.clip_locked_format_id = v_id
-
-        total_full_bytes = v_bytes + a_bytes
+        self.clip_locked_format_id = locked_id
         clip_bytes = int(total_full_bytes * ratio)
         res_tag = self._resolution_label(best_v)
         self.clip_size_estimate_label.configure(
@@ -3862,6 +3904,123 @@ class UniversalDownloaderApp(ctk.CTk):
             raise yt_dlp.utils.DownloadError("No se pudo recortar el segmento con FFmpeg.")
         return output_path
 
+    def _run_clip_with_external_engine(
+        self,
+        url: str,
+        start_sec: float,
+        end_sec: float,
+        dl_format: str,
+        dl_quality: str,
+        locked_id: str | None,
+        output_template: str,
+    ) -> str | None:
+        """Ejecuta el recorte de fragmento usando el motor externo actualizado yt-dlp.exe."""
+        os.makedirs(self.download_dir, exist_ok=True)
+        before_snapshot = {
+            str(p): p.stat().st_mtime
+            for p in Path(self.download_dir).glob("*")
+            if p.is_file()
+        }
+
+        cmd = [
+            str(self.external_ytdlp_path),
+            "--encoding",
+            "utf-8",
+            "--no-playlist",
+            "--force-overwrites",
+            "--windows-filenames",
+            "--retries",
+            "25",
+            "--fragment-retries",
+            "25",
+            "--socket-timeout",
+            "30",
+            "--retry-sleep",
+            "http:exp=1:15",
+            "--retry-sleep",
+            "fragment:exp=1:15",
+            "--concurrent-fragments",
+            "4",
+            "--buffer-size",
+            "256K",
+            "--newline",
+            "--download-sections",
+            f"*{start_sec:.2f}-{end_sec:.2f}",
+            "--force-keyframes-at-cuts",
+            "-o",
+            output_template,
+        ]
+
+        if self.ffmpeg_path:
+            cmd.extend(["--ffmpeg-location", self.ffmpeg_path])
+
+        if dl_format == self.FORMAT_VIDEO:
+            fmt_selector = self._get_video_format_selector(dl_quality, locked_id)
+            cmd.extend(["-f", fmt_selector])
+            if self.ffmpeg_path:
+                cmd.extend(["--merge-output-format", "mp4"])
+        elif dl_format == self.FORMAT_AUDIO:
+            kbps = self.AUDIO_QUALITIES.get(dl_quality, 320)
+            cmd.extend(["-f", "bestaudio/best"])
+            if self.ffmpeg_path:
+                cmd.extend(["-x", "--audio-format", "mp3", "--audio-quality", f"{kbps}K"])
+
+        cmd.append(url)
+
+        creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creation_flags,
+        )
+
+        last_file = None
+        output_lines = []
+        if proc.stdout:
+            for raw_line in proc.stdout:
+                line = clean_ansi(raw_line).strip()
+                if not line:
+                    continue
+                output_lines.append(line)
+
+                match = CLI_PROGRESS_RE.search(line)
+                if match:
+                    pct_float = float(match.group("pct"))
+                    speed = match.group("speed")
+                    eta = match.group("eta")
+                    self._update_status(
+                        f"Recortando... Velocidad: {speed} | Restante: {eta}",
+                        pct_float / 100.0,
+                        f"{int(pct_float)}%",
+                        throttle=True,
+                    )
+                else:
+                    self._append_log(f"[INFO] {line}")
+                    if "Destination:" in line:
+                        last_file = line.split("Destination:", 1)[1].strip()
+                    elif "Merging formats into" in line:
+                        last_file = line.split("Merging formats into", 1)[1].strip().strip('"')
+
+        ret = proc.wait()
+        if ret != 0:
+            raise yt_dlp.utils.DownloadError("\n".join(output_lines[-5:]))
+
+        if not last_file or not os.path.isfile(last_file):
+            changed_files = [
+                str(p)
+                for p in Path(self.download_dir).glob("*")
+                if p.is_file() and (str(p) not in before_snapshot or p.stat().st_mtime > before_snapshot[str(p)])
+            ]
+            if changed_files:
+                changed_files.sort(key=lambda fp: os.path.getmtime(fp), reverse=True)
+                last_file = changed_files[0]
+
+        return last_file
+
     def _run_clip_download_task(
         self,
         url: str,
@@ -3945,13 +4104,24 @@ class UniversalDownloaderApp(ctk.CTk):
 
                     clip_primary_exc = None
                     try:
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                            info = ydl.extract_info(url, download=True)
-                            if info:
-                                if "requested_downloads" in info and info["requested_downloads"]:
-                                    downloaded_filepath = info["requested_downloads"][0].get("filepath")
-                                else:
-                                    downloaded_filepath = ydl.prepare_filename(info)
+                        if self.use_external_engine and self.external_ytdlp_path.is_file():
+                            downloaded_filepath = self._run_clip_with_external_engine(
+                                url,
+                                start_sec,
+                                end_sec,
+                                dl_format,
+                                dl_quality,
+                                locked_id if dl_format == self.FORMAT_VIDEO else None,
+                                output_template,
+                            )
+                        else:
+                            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                                info = ydl.extract_info(url, download=True)
+                                if info:
+                                    if "requested_downloads" in info and info["requested_downloads"]:
+                                        downloaded_filepath = info["requested_downloads"][0].get("filepath")
+                                    else:
+                                        downloaded_filepath = ydl.prepare_filename(info)
 
                         if (
                             selected_format == self.FORMAT_AUDIO

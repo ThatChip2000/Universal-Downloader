@@ -391,6 +391,12 @@ def set_appearance_mode(mode: str):
     global _CURRENT_THEME
     app = _ensure_qapp()
     m = (mode or "dark").lower()
+    if m == "system":
+        try:
+            scheme = app.styleHints().colorScheme()
+            m = "light" if scheme == Qt.ColorScheme.Light else "dark"
+        except Exception:
+            m = "dark"
     if m == "light":
         _CURRENT_THEME = "light"
         app.setStyleSheet(LIGHT_STYLESHEET)
@@ -808,12 +814,20 @@ class CTkScrollableFrame(QScrollArea, _GridPlaceableMixin):
 
     def winfo_children(self) -> list[QWidget]:
         out = []
-        while self._layout.count():
-            item = self._layout.takeAt(0)
+        for i in range(self._layout.count()):
+            item = self._layout.itemAt(i)
             w = item.widget() if item else None
             if w is not None:
                 out.append(w)
         return out
+
+    def clear_children(self):
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            w = item.widget() if item else None
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
 
 
 class CTkLabel(QLabel, _GridPlaceableMixin):
