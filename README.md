@@ -1,4 +1,4 @@
-# Universal Downloader (`v3.0.2`)
+# Universal Downloader (`v3.0.3`)
 
 Aplicación de escritorio nativa para Windows con interfaz rápida en **C++ (`PySide6 / Qt6 Widgets`)** para descargar y recortar videos (`MP4`), audios (`MP3`), imágenes y `GIF` animados desde **YouTube**, **TikTok**, **Instagram**, **Facebook** y **Twitter (X)**.
 

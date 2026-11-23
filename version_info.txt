@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(3, 0, 2, 0),
-    prodvers=(3, 0, 2, 0),
+    filevers=(3, 0, 3, 0),
+    prodvers=(3, 0, 3, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -18,12 +18,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'Universal Media Tools'),
             StringStruct('FileDescription', 'Universal Downloader - Gestor de Descargas Multimedia'),
-            StringStruct('FileVersion', '3.0.2.0'),
+            StringStruct('FileVersion', '3.0.3.0'),
             StringStruct('InternalName', 'UniversalDownloader'),
             StringStruct('LegalCopyright', 'Copyright (C) 2026 Universal Media Tools. Todos los derechos reservados.'),
             StringStruct('OriginalFilename', 'Universal Downloader.exe'),
             StringStruct('ProductName', 'Universal Downloader'),
-            StringStruct('ProductVersion', '3.0.2.0')
+            StringStruct('ProductVersion', '3.0.3.0')
           ]
         )
       ]

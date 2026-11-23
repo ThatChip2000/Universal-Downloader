@@ -4,6 +4,14 @@ Este documento registra de forma cronológica y versionada todas las funcionalid
 
 ---
 
+## v3.0.3 (23-11-2026) - Soporte de Runtimes JavaScript (EJS) para YouTube
+### Correcciones Críticas de Extracción en YouTube
+- **Habilitación automática de runtimes JavaScript (`deno`, `node`, `bun`, `quickjs`) y componente remoto `ejs:github`:**
+  - En versiones recientes de `yt-dlp`, YouTube exige un runtime JavaScript (EJS) para resolver el desafío del reproductor; por defecto `yt-dlp` solo habilita `deno` y devolvía `ERROR: [youtube] ... This video is not available` cuando el sistema tenía `node` instalado pero no `deno`.
+  - Se configuró `js_runtimes` (`--js-runtimes deno / node / bun / quickjs`) junto con `remote_components: ["ejs:github"]` (`--remote-components ejs:github`) en todos los analizadores y descargadores (Pestaña 1, Pestaña 2 / Clips, motor integrado y motor externo `yt-dlp.exe`).
+
+---
+
 ## v3.0.2 (21-11-2026) - Correcciones Integrales de Auditoría Técnica (Concurrencia, Motor Externo en Clips y Tema Sistema)
 ### Correcciones Funcionales, Concurrencia y Estabilidad
 - **Unificación del motor externo (`yt-dlp.exe`) en análisis y módulo de recorte (`[A1]`):**

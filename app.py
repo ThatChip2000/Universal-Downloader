@@ -13,7 +13,16 @@ from pathlib import Path
 import qt_backend as ctk
 import yt_dlp
 
-APP_VERSION = "3.0.2"
+APP_VERSION = "3.0.3"
+YTDLP_JS_RUNTIMES = {"deno": {}, "node": {}, "bun": {}, "quickjs": {}}
+YTDLP_REMOTE_COMPONENTS = ["ejs:github"]
+YTDLP_CLI_JS_ARGS = [
+    "--js-runtimes", "deno",
+    "--js-runtimes", "node",
+    "--js-runtimes", "bun",
+    "--js-runtimes", "quickjs",
+    "--remote-components", "ejs:github",
+]
 
 # Parche de seguridad para corregir el bug interno de yt-dlp donde exc_info es None
 # y al evaluar 'hasattr(e, "exc_info") and e.exc_info[0]' arroja TypeError: 'NoneType' object is not subscriptable.
@@ -1856,6 +1865,8 @@ class UniversalDownloaderApp(ctk.CTk):
             "extract_flat": "in_playlist",
             "playlistend": 100,
             "skip_download": True,
+            "js_runtimes": YTDLP_JS_RUNTIMES,
+            "remote_components": YTDLP_REMOTE_COMPONENTS,
             "http_headers": base_headers,
         }
         try:
@@ -1927,6 +1938,7 @@ class UniversalDownloaderApp(ctk.CTk):
                                     "--no-playlist",
                                     "--no-warnings",
                                     "--no-check-certificate",
+                                    *YTDLP_CLI_JS_ARGS,
                                     url,
                                 ],
                                 capture_output=True,
@@ -2817,6 +2829,8 @@ class UniversalDownloaderApp(ctk.CTk):
             },
             "concurrent_fragment_downloads": 4,
             "buffersize": 256 * 1024,
+            "js_runtimes": YTDLP_JS_RUNTIMES,
+            "remote_components": YTDLP_REMOTE_COMPONENTS,
             "progress_hooks": [self._yt_dlp_progress_hook],
             "logger": YtDlpLogger(self._append_log),
             "http_headers": {
@@ -2889,6 +2903,7 @@ class UniversalDownloaderApp(ctk.CTk):
             "--buffer-size",
             "256K",
             "--newline",
+            *YTDLP_CLI_JS_ARGS,
             "-o",
             output_template,
         ]
@@ -3167,6 +3182,8 @@ class UniversalDownloaderApp(ctk.CTk):
                     "no_warnings": True,
                     "noplaylist": True,
                     "skip_download": True,
+                    "js_runtimes": YTDLP_JS_RUNTIMES,
+                    "remote_components": YTDLP_REMOTE_COMPONENTS,
                 }
                 with yt_dlp.YoutubeDL(probe_opts) as probe_ydl:
                     probe_info = probe_ydl.extract_info(url, download=False)
@@ -3492,6 +3509,8 @@ class UniversalDownloaderApp(ctk.CTk):
                     "no_warnings": True,
                     "noplaylist": True,
                     "skip_download": True,
+                    "js_runtimes": YTDLP_JS_RUNTIMES,
+                    "remote_components": YTDLP_REMOTE_COMPONENTS,
                     "http_headers": {
                         "User-Agent": (
                             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -3526,6 +3545,7 @@ class UniversalDownloaderApp(ctk.CTk):
                                     "--no-playlist",
                                     "--no-warnings",
                                     "--no-check-certificate",
+                                    *YTDLP_CLI_JS_ARGS,
                                     url,
                                 ],
                                 capture_output=True,
@@ -3944,6 +3964,7 @@ class UniversalDownloaderApp(ctk.CTk):
             "--buffer-size",
             "256K",
             "--newline",
+            *YTDLP_CLI_JS_ARGS,
             "--download-sections",
             f"*{start_sec:.2f}-{end_sec:.2f}",
             "--force-keyframes-at-cuts",
