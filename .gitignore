@@ -5,10 +5,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Artefactos de compilación de PyInstaller
+# Artefactos de compilación de PyInstaller (se excluyen .exe/.zip excepto qjs.exe,
+# que es el motor JavaScript portátil QuickJS-ng de ~1.8 MB usado como respaldo EJS para YouTube)
 build/
 dist/
 *.exe
+!qjs.exe
 *.zip
 
 # Carpetas locales de descargas y pruebas

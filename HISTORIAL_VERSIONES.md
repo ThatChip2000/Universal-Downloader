@@ -4,6 +4,14 @@ Este documento registra de forma cronológica y versionada todas las funcionalid
 
 ---
 
+## v3.0.4 (23-11-2026) - Motor JavaScript Portable Integrado (QuickJS / qjs.exe + yt-dlp-ejs)
+### Portabilidad 100% Autónoma en YouTube (Sin Instalaciones Externas)
+- **Empaquetado de `QuickJS-ng` (`qjs.exe`, `~1.8 MB`) y `yt-dlp-ejs` dentro de `Universal Downloader.exe`:**
+  - **¿Por qué se añadió?** En videos de YouTube que bloquean clientes alternativos (`VisionOS` / `TV`) y exigen resolver el desafío JavaScript (`EJS`) del reproductor web, un PC con Windows limpio sin `Node.js` ni `Deno` instalados fallaría con `This video is not available`.
+  - **¿Cuándo se activa?** `yt-dlp` aplica prioridades automáticas por rendimiento (`Deno [1000]` > `Node.js [900]` > `Bun [880]` > `QuickJS [850]`). Si el PC tiene `Deno`, `Node.js` o `Bun`, utiliza ese motor JIT de inmediato; si el PC **no tiene ningún motor JS instalado**, activa automáticamente el `qjs.exe` integrado (copiado en `%LOCALAPPDATA%\UniversalDownloader\bin\qjs.exe`) junto con los scripts offline `yt-dlp-ejs`, garantizando que el `.exe` sea 100% portable en cualquier computadora.
+
+---
+
 ## v3.0.3 (23-11-2026) - Soporte de Runtimes JavaScript (EJS) para YouTube
 ### Correcciones Críticas de Extracción en YouTube
 - **Habilitación automática de runtimes JavaScript (`deno`, `node`, `bun`, `quickjs`) y componente remoto `ejs:github`:**

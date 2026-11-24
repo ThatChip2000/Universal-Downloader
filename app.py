@@ -13,16 +13,7 @@ from pathlib import Path
 import qt_backend as ctk
 import yt_dlp
 
-APP_VERSION = "3.0.3"
-YTDLP_JS_RUNTIMES = {"deno": {}, "node": {}, "bun": {}, "quickjs": {}}
-YTDLP_REMOTE_COMPONENTS = ["ejs:github"]
-YTDLP_CLI_JS_ARGS = [
-    "--js-runtimes", "deno",
-    "--js-runtimes", "node",
-    "--js-runtimes", "bun",
-    "--js-runtimes", "quickjs",
-    "--remote-components", "ejs:github",
-]
+APP_VERSION = "3.0.4"
 
 # Parche de seguridad para corregir el bug interno de yt-dlp donde exc_info es None
 # y al evaluar 'hasattr(e, "exc_info") and e.exc_info[0]' arroja TypeError: 'NoneType' object is not subscriptable.
@@ -50,7 +41,7 @@ except Exception:
 
 
 def get_appdata_bin_dir() -> Path:
-    """Carpeta persistente en AppData para almacenar el motor yt-dlp y ffmpeg actualizables en cualquier PC."""
+    """Carpeta persistente en AppData para almacenar el motor yt-dlp, ffmpeg y qjs actualizables en cualquier PC."""
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     bin_dir = Path(base) / "UniversalDownloader" / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -78,6 +69,68 @@ def get_ffmpeg_path() -> str | None:
                 return BUNDLED_FFMPEG
         return str(standard_ffmpeg)
     return None
+
+
+def get_qjs_path() -> str | None:
+    """
+    Localiza el motor JavaScript portátil QuickJS-ng (qjs.exe) empaquetado junto a la aplicación
+    y lo expone en %LOCALAPPDATA%\\UniversalDownloader\\bin\\qjs.exe.
+
+    ¿Por qué se incluye QuickJS (qjs.exe)?
+      YouTube protege las descargas de su reproductor web mediante desafíos JavaScript (EJS).
+      Sin un runtime JS, los videos que bloquean clientes alternativos (VisionOS / TV) fallan
+      con 'This video is not available'. Empaquetar qjs.exe (~1.8 MB) junto con yt-dlp-ejs
+      garantiza que Universal Downloader.exe sea 100% portable en cualquier PC con Windows
+      limpio sin obligar al usuario a instalar Node.js ni Deno por separado.
+
+    ¿Cuándo se activa?
+      yt-dlp asigna prioridades internas a cada motor JS: Deno (1000) > Node.js (900) > Bun (880) > QuickJS (850).
+      - Si el PC tiene Deno, Node.js o Bun instalado, yt-dlp usa automáticamente ese motor JIT de mayor prioridad.
+      - Si el PC NO tiene ningún runtime JS instalado, yt-dlp activa automáticamente este qjs.exe integrado como respaldo.
+    """
+    bin_dir = get_appdata_bin_dir()
+    bin_dir_str = str(bin_dir)
+    current_path = os.environ.get("PATH", "")
+    if bin_dir_str not in current_path.split(os.pathsep):
+        os.environ["PATH"] = bin_dir_str + os.pathsep + current_path
+
+    exe_name = "qjs.exe" if sys.platform == "win32" else "qjs"
+    base_dir = Path(getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))))
+    bundled_qjs = base_dir / exe_name
+    target_qjs = bin_dir / exe_name
+
+    if bundled_qjs.is_file():
+        try:
+            if not target_qjs.is_file() or target_qjs.stat().st_size != bundled_qjs.stat().st_size:
+                shutil.copy2(bundled_qjs, target_qjs)
+            return str(target_qjs)
+        except Exception:
+            return str(bundled_qjs)
+
+    if target_qjs.is_file():
+        return str(target_qjs)
+
+    system_qjs = shutil.which("qjs")
+    if system_qjs and os.path.isfile(system_qjs):
+        return system_qjs
+    return None
+
+
+BUNDLED_QJS_PATH = get_qjs_path()
+YTDLP_JS_RUNTIMES = {
+    "deno": {},
+    "node": {},
+    "bun": {},
+    "quickjs": {"path": BUNDLED_QJS_PATH} if BUNDLED_QJS_PATH else {},
+}
+YTDLP_REMOTE_COMPONENTS = ["ejs:github"]
+YTDLP_CLI_JS_ARGS = [
+    "--js-runtimes", "deno",
+    "--js-runtimes", "node",
+    "--js-runtimes", "bun",
+    "--js-runtimes", f"quickjs:{BUNDLED_QJS_PATH}" if BUNDLED_QJS_PATH else "quickjs",
+    "--remote-components", "ejs:github",
+]
 
 
 def get_appdata_config_path() -> Path:
@@ -1070,6 +1123,8 @@ class UniversalDownloaderApp(ctk.CTk):
         self._append_log("Plataformas activas: YouTube, TikTok, Instagram, Facebook y Twitter (X).")
         if self.ffmpeg_path:
             self._append_log(f"Motor FFmpeg integrado listo: {os.path.basename(self.ffmpeg_path)}")
+        if BUNDLED_QJS_PATH:
+            self._append_log(f"Motor JS portable (QuickJS fallback) listo: {os.path.basename(BUNDLED_QJS_PATH)}")
         else:
             self._append_log(
                 "[AVISO] No se detectó FFmpeg. Instala 'imageio-ffmpeg' o FFmpeg para unir flujos HD y convertir a MP3/GIF."
